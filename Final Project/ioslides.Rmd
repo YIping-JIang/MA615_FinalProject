@@ -1,0 +1,434 @@
+---
+title: "MA615 Final Project"
+author: "Yiping Jiang"
+date: "12/16/2019"
+output: 
+  ioslides_presentation:
+    transition: slower
+    fig_width: 8
+    fig_height: 2.8
+    fig_caption: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+pacman::p_load(tidyverse, tidyr, jsonlite, stringr, ggplot2, tibble, openintro, choroplethr, tm, SnowballC, wordcloud, RColorBrewer, choroplethrMaps)
+```
+
+# 1. Introduction  
+
+## 
+
+**1.1 About Yelp**  
+
+As a business directory service forum, Yelp develops hosts and markets the Yelp.com website and the Yelp mobile app, which publishes crowd-sourced reviews about businesses. With the continuous update, this application has brought more and more features, such as users can evaluate their experiences in different levels of stars and leave comments for various restaurants, which makes it easier and more efficient while looking for the right places to have great food.  
+
+As a result, I am interested in analyzing the relationship between reviews and three other factors, which are the star, state, and category, to evaluate the overall quality of restaurants.  
+
+##
+
+**1.2 Dataset Description**     
+
+The dataset is from Yelp Open Dataset which contains information of businesses, reviews and users:  
+
+- business.json: a dataset including names, locations, stars, number of reviews, attributes, and open hours of businesses.  
+
+This dataset also has some other files, from which information not used in this report, such as check-in time, tips, and photos of each business.  
+
+# 2. Data Preparation  
+
+## 
+
+**2.1 Read-in data**  
+
+```{r echo = FALSE}
+yp0 <- stream_in(file("/Users/sebas_jiang/Desktop/MA615/Final\ Project/yelp_academic_dataset_business.json"), verbose = FALSE)
+yp <- flatten(yp0)
+```
+
+From the above dataset, I found four features that could plot in different patterns, which are star, state, categories, and review_count, from which the following analyses will base on.    
+
+**2.2 Data cleaning**  
+
+```{r echo = FALSE}
+yp <- as_data_frame(yp)
+yp <- yp %>% 
+  select(-starts_with("hours"), -starts_with("attribute")) %>%
+  filter(str_detect(categories, "Restaurant"))
+yp$categories <- strsplit(yp$categories, split = ",")
+yp_un <- unnest(yp, categories)
+```
+
+In the above procedure, I eliminated some features (attributes and hours) to make the dataset cleaner, and I also unnested the variables to store as yp_un, which helps to analyze them further when one restaurant is attached to a different variable.  
+
+**2.3 Variables checking**   
+
+For starters, let us take a look at the four critical variables (star, state, category, and review_count) in the dataset.  
+
+##
+
+***2.3.1 Stars***
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+yp$str <- as.factor(yp$stars)
+ggplot(yp, aes(stars)) +
+  geom_bar(fill = "#0000EA", color = "#0000EA") + 
+  ggtitle("Total Count of Stars among Restaurants")
+```
+
+The figure above shows the distribution of stars, and we can tell that more restaurants tend to have a rating of stars between 3 to 4.    
+
+##
+
+***2.3.2 State***   
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+yp$st <- as.factor(yp$state)
+rr_st <- yp %>%
+  group_by(state) %>%
+  summarize(freq = n()) %>%
+  arrange(desc(freq))
+rr_st$state <- as.character(rr_st$state)
+rr_st <- rr_st[is.na(as.numeric(rr_st$state)), ]
+rr_st <- rr_st[nchar(rr_st$state) == 2, ]
+rr_st_top <- rr_st[c(1:10), ]
+rr_st_top$state <- factor(rr_st_top$state, levels = rr_st_top$state[order(rr_st_top$freq)])
+rr_st_topfig <- ggplot(rr_st_top, aes(x = state, y = freq, fill = cut(freq, 100))) + 
+  geom_histogram(stat = "identity", show.legend = FALSE) + 
+  coord_flip() + 
+  xlab("State") + 
+  ylab("Count") + 
+  ggtitle("Frequency of Restaurants in Top 10 States")
+rr_st_topfig
+```
+
+From the above plot, I eliminated states with missing values about businesses and showed only ten representative states in increasing order; and I did the following step to check their completeness.  
+
+##
+
+***2.3.2 State***  
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+map0 <- yp0 %>% group_by(state) %>% 
+  summarise(freq = n()) %>% 
+  mutate(not_missing = "Existing")
+map0 <- map0[, c("state", "not_missing")]
+colnames(map0) <- c("region", "value")
+map0$region <- tolower(abbr2state(as.character(map0$region)))
+map0 <- map0[!is.na(map0$region), ]
+state_choropleth(map0, title = "Data Missing among States")
+```
+
+As the black area represents for states of the United States with missing value in the dataset, the analysis will be more persuasive if we focus on exploring specific states without missing values.  
+
+##
+
+***2.3.3 Category***   
+
+```{r echo = FALSE}
+rr_cat <- yp_un %>%
+ count(categories) %>%
+ arrange(desc(n))
+rr_cat_top <- rr_cat[c(7, 9, 10, 12:17),]
+rr_cat_top$categories <- factor(rr_cat_top$categories, levels = rr_cat_top$categories[order(rr_cat_top$n)])
+rr_cat_topfig <- ggplot(rr_cat_top, aes(x = categories, y = n, fill = categories)) + 
+  geom_histogram(stat = "identity", show.legend = FALSE) + 
+  coord_flip() + 
+  scale_fill_brewer(palette = "YlOrRd") + 
+  xlab("Categories") + ylab("Count") + 
+  ggtitle("Number of Restaurants among Different Categories")
+rr_cat_topfig
+```
+
+From the above plot, we can tell the distribution of categories is quite dispersed, because the categories themselves not exclude from each other, and they follow a pattern of hierarchy. As a result, we choose high frequency categories that people used to have while introducing a restaurant with visual sense of distribution among various categories.   
+
+##
+
+***2.3.4 Review count***
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+yp$state <- as.character(yp$state)
+yp1 <- yp[is.na(as.numeric(yp$state)),]
+yp1 <- yp1[nchar(yp1$state) == 2,]
+ggplot(yp1, aes(x = state, y = review_count)) + 
+  geom_boxplot()
+```
+
+From the above plot, we can see there are only a few outliers of review count for most states, which may due to the small data size, so in order to get better distribution, we need to do further analyses on specific states with more information.  
+
+# 3. Exploratory Data Analysis  
+
+##
+
+**3.1 Total Review Count**  
+
+<font size="3">Let us take a look at the relationship between total review count and star, state and category.</font>    
+
+***3.1.1 Stars***
+
+```{r echo = FALSE, fig.height = 3, fig.width = 8}
+rev_tt_str <- yp_un %>% 
+  group_by(stars) %>%
+  summarize(freq = n(), total = sum(review_count)) %>% 
+  mutate(average = round(total/freq, 4)) %>%
+  arrange(desc(total))
+rev_tt_strfig <- ggplot(rev_tt_str, aes(x = stars, y = total)) + 
+  geom_histogram(fill = "chartreuse4", color = "chartreuse4", stat = "identity") + 
+  ylab("Number of Total Reviews") + 
+  xlab("Star") + 
+  ggtitle("Total Reviews among Different Stars")
+rev_tt_strfig
+```
+
+<font size="3">From the above histogram, we can see that 4-star receives the most reviews (over 1.5 million) compared to that of any other scores; and restaurants with lower than 2.5-star and over 4.5 stars (excluded) receive fewer reviews; and the distribution of the star focuses on from 3 to 4.5 (not excluded).</font>  
+
+##
+
+***3.1.2 State***  
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+rev_tt_st <- yp %>% 
+  filter(str_detect(categories, "Restaurant")) %>%
+  group_by(state) %>%
+  summarize(freq = n(), total = sum(review_count)) %>% 
+  mutate(average = round(total/freq, 4)) %>%
+  arrange(desc(total))
+rev_tt_st_top <- rev_tt_st[c(1:10), ]
+rev_tt_st_top$state <- factor(rev_tt_st_top$state, levels = rev_tt_st_top$state[order(rev_tt_st_top$total)])
+rev_tt_st_topfig <- ggplot(rev_tt_st_top, aes(x = state, y = total, fill = cut(total, 100))) + 
+  geom_histogram(stat = "identity", show.legend = FALSE) + 
+  coord_flip() + 
+  xlab("states") + 
+  ylab("total Number of reviews") + 
+  ggtitle("Total reviews in top 10 states")
+rev_tt_st_topfig
+```
+
+From the above plot, we can tell that NV and AZ have the most reviews compared to other top states in the United States.  
+
+##
+
+***3.1.3 Category***  
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+rev_tt_cat <- yp_un %>% 
+  group_by(categories) %>%
+  summarize(freq = n(), total = sum(review_count)) %>% 
+  mutate(average = round(total/freq, 4)) %>%
+  arrange(desc(total))
+rev_tt_cat_top <- rev_tt_cat[c(6:15), ]
+rev_tt_cat_top$categories <- factor(rev_tt_cat_top$categories, levels = rev_tt_cat_top$categories[order(rev_tt_cat_top$total)])
+rev_tt_cat_topfig <- ggplot(rev_tt_cat_top, aes(x = categories, y = total, fill = cut(total, 100))) + 
+  geom_histogram(stat = "identity", show.legend = FALSE) + 
+  coord_flip() + 
+  xlab("Categories") + 
+  ylab("Total number of reviews") + 
+  ggtitle("Total Reviews among Categories")
+rev_tt_cat_topfig
+```
+
+From the above plot, we only look at top 10 popular categories and their review counts, and we can tell that American food has the most reviews than that of any other categories.  
+
+##
+
+**3.2 Average Review Count**  
+
+Similar to 3.1, in this section, we take a look at the relationships between average review count and star, state, and category. Different from the total review count, the average review count can treat as the popularity among those variables, which should make some differences compared to the above section.   
+
+##
+
+***3.2.1 Stars***  
+
+```{r echo = FALSE}
+rev_ave_str <- yp_un %>% 
+  group_by(stars) %>%
+  summarize(freq = n(), total = sum(review_count)) %>% 
+  mutate(average = round(total/freq, 4))
+rev_ave_str_fig <- ggplot(rev_ave_str, aes(x = stars, y = average)) + 
+  geom_line() + 
+  geom_point(color = "blue") + 
+  ylab("Average nmber of reviews") + 
+  xlab("Stars") + 
+  ggtitle("Average Number of Reviews among Different Stars")
+rev_ave_str_fig
+```
+
+<font size="4">From the above plot, we can see that the average number of reviews tends to increase from 1-star to 4-star, and it shows a decreasing trend from 4-star to 5-star.  It makes common sense that the more reviews a restaurant receives, the more popular it becomes, and the more customers will go there with leaving even more reviews as a result; while for those new restaurants who just opened, they have not taken many customers, which could explain that even though they have a comparatively higher star (say 5), but they got only a few reviews.</font>
+
+##
+
+***3.2.2 State***
+
+```{r echo = FALSE}
+rev_ave_st <- yp %>% 
+  filter(str_detect(categories, "Restaurant")) %>%
+  group_by(state) %>%
+  summarize(freq = n(), total = sum(review_count)) %>%
+  mutate(average = round(total/freq, 2)) %>%
+  arrange(desc(average))
+rev_ave_st$state <- as.character(rev_ave_st$state)
+rev_ave_st <- rev_ave_st[is.na(as.numeric(rev_ave_st$state)), ]
+rev_ave_st$state <- factor(rev_ave_st$state, levels = rev_ave_st$state[order(rev_ave_st$average)])
+rev_ave_st = rev_ave_st %>%
+  filter(state %in% c("NV", "AZ", "NC", "WI", "PA", "IL", "OH", "ON", "SC", "QC", "AB"))
+rev_ave_stfig <- ggplot(rev_ave_st, aes(x = state, y = average)) + 
+  geom_point(color = "blue") +  
+  xlab("State") + 
+  ylab("Average number of reviews") + 
+  ggtitle("Average Reviews among States")
+rev_ave_stfig
+```
+
+From the above plot, we can see NV has a more significant average number of reviews than all other states, while we cannot say that NV people tend to leave reviews; instead, we can only say that the information of NV is more completed than others.  
+
+##
+
+***3.2.3 Category***  
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+rev_ave_cat <- yp_un %>% 
+  group_by(categories) %>%
+  summarize(freq = n(), total = sum(review_count)) %>% 
+  mutate(average = round(total/freq, 1)) %>%
+  filter(freq > 2000) %>%
+  arrange(desc(average))
+rev_ave_cat$categories <- factor(rev_ave_cat$categories, levels = rev_ave_cat$categories[order(rev_ave_cat$average)])
+rev_ave_catfig <- ggplot(rev_ave_cat, aes(x = average, y = categories)) + 
+  geom_point(color = "blue") + 
+  xlab("Average number of reviews") + 
+  ylab("Categories") + 
+  ggtitle("Average reviews of categories")
+rev_ave_catfig
+```
+
+From the above plot, for restaurants whose frequency larger than 2,000 (to narrow the scope), we can tell that new American food is more popular and tend to receive more reviews than others.  
+
+##
+
+**3.3 Review Distribution**  
+
+***3.3.1 State***   
+
+In order to analyze different states with normal patterns, we eliminate those whose outliers are larger than 1,000.  
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+yp2 <- yp1 %>%
+  filter(state == c("AB", "AZ", "IL", "NC", "NV", "OH", "ON", "OR", "PA", "QC", "SC", "WI")) %>%
+  filter(review_count <= 1000)
+ggplot(yp2, aes(x = state, y = review_count)) + 
+  geom_boxplot(fill = "lightblue", color = "blue") +
+  xlab("State") + 
+  ylab("Number of reviews") + 
+  ggtitle("Review Distribution among Different States")
+```
+
+##
+
+***3.3.2 Category***  
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+yp_un1 <- yp_un %>%
+  filter(categories == rr_cat$categories[c(7, 9, 10, 12:17)]) %>%
+  filter(review_count <= 1000)
+ggplot(yp_un1, aes(x = categories, y = review_count)) + 
+  coord_flip() + 
+  geom_boxplot(fill = "lightblue", color = "blue") +
+  xlab("Category") + 
+  ylab("State") + 
+  ggtitle("Review Distribution among Categories")
+```
+
+From the above boxplot, we can see that New American food has a more significant variation than other categories, and there is no big difference in the median of all categories.  
+
+##
+
+### 3.3.3 Star
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+yp3 <- yp %>%
+  filter(review_count <= 1000)
+yp3$stars <- as.factor(yp3$stars)
+ggplot(yp3, aes(x = stars, y = review_count)) + 
+  geom_boxplot(fill = "lightblue", color = "blue") +
+  xlab("Star") + 
+  ylab("Number of reviews") + 
+  ggtitle("Review Distribution among Stars")
+```
+
+From the above plot, we can tell that the median shows a increasing trend from 1-star to 4-star, and it decreses from 4-star to 5-star.  
+
+# 4. Word Cloud
+
+##  
+
+- To further analyze the review data, we want to see which words appear more frequently in the review dataset among different restaurants, so let us make word clouds for 1-star and 5-star restaurants.
+
+**4.1 1-star**  
+
+We firstly plot the below histogram to show the total count of most frequent words, which followed by a word cloud that provides a better view.  
+
+##
+
+```{r echo = FALSE, fig.height = 6, fig.width = 8}
+text <- readLines("/Users/sebas_jiang/Desktop/MA615/Final\ Project/1-star.txt", encoding = "UTF-8")
+cp = Corpus(VectorSource(text))
+cp = tm_map(cp, content_transformer(tolower))
+cp = tm_map(cp, removePunctuation)
+cp = tm_map(cp, removeNumbers)
+cp <- tm_map(cp, removeWords, c("I", "he", "she", "we", "today", "come", "go", "get", "have", "order", "just", "said", "can", "came", "people", "one", "place", "will", "told", "got", "went", "know", "take", "took", "ordered", "minutes", "service", "food", "time", "the", "and", "was", "were", "for", "that", "with", "this", "you", "had", "when", "are", "all", "back", "from", "them", "about", "they", "there", "not", "but", "would", "our", "out", "there", "here", "her", "him"))
+tdm = TermDocumentMatrix(cp, control = list(minWordLength = 1))
+a = as.matrix(tdm)
+odr <- sort(rowSums(a), decreasing = TRUE)
+str1 <- data.frame(word = names(odr), freq = odr)
+barplot(str1[1:25,]$freq, las = 2, names.arg = str1[1:25,]$word, 
+        col = "blue", main = "1-Star Restaurants Most Frequent Words", ylab = "Number of word count")
+```
+
+##
+
+```{r echo = FALSE, fig.height = 4, fig.width = 8}
+set.seed(2019)
+wordcloud(str1$word, str1$freq, scale = c(6, 0.2), min.freq = 10, max.words = 200, rot.per = 0.5, colors = brewer.pal(6, "Dark2"))
+```
+
+From the above word cloud, we can see that for 1-star restaurants there are more negative evaluation, such as `bad `, `dont`, and `horrible `.  
+
+##
+
+**4.2 5-star**  
+
+Same as 4.1.  
+
+```{r echo = FALSE, fig.height = 5, fig.width = 8}
+text <- readLines("/Users/sebas_jiang/Desktop/MA615/Final\ Project/5-star.txt", encoding = "UTF-8")
+cp5 = Corpus(VectorSource(text))
+cp5 = tm_map(cp5, content_transformer(tolower))
+cp5 = tm_map(cp5, removePunctuation)
+cp5 = tm_map(cp5, removeNumbers)
+cp5 <- tm_map(cp5, removeWords, c("I", "he", "she", "we", "today", "come", "go", "get", "have", "order", "just", "said", "can", "came", "people", "one", "place", "will", "told", "got", "went", "know", "take", "took", "ordered", "minutes", "service", "food", "time", "the", "and", "was", "were", "for", "that", "with", "this", "you", "had", "when", "are", "all", "back", "from", "them", "about", "they", "there", "not", "but", "would", "our", "out", "there", "here", "her", "him"))
+cp5 <- tm_map(cp5, removeWords, stopwords("english"))
+tdm5 = TermDocumentMatrix(cp5, control = list(minWordLength = 1))
+b = as.matrix(tdm5)
+odr5 <- sort(rowSums(a), decreasing = TRUE)
+str5 <- data.frame(word = names(odr5), freq = odr5)
+barplot(str5[1:25,]$freq, las = 2, names.arg = str5[1:25,]$word, col = "blue", main = "5-Star Restaurants Most Frequent Words", ylab = "Number of word count")
+```
+
+##
+
+```{r echo = FALSE, fig.height = 3.5, fig.width = 8}
+set.seed(2019)
+wordcloud(str5$word, str1$freq, scale = c(6, 0.2), min.freq = 10, max.words = 200, rot.per = 0.5, colors = brewer.pal(6, "Dark2"))
+```
+
+From the above word cloud, we can see that there are more favorable evaluations for 5-star restaurants, such as `great `, `well`, and `like `.  
+
+This difference between the word cloud of 1-star and 5-star shows that, reviews by users can reflect stars. 
+
+# 5. Limitation & Future Work  
+
+##
+
+Due to the missing data, I only picked states that contain the information needed, for those states with missing data I eliminated them, which means even if I do the modeling and model checking after the EDA, the conclusion I draw from it cannot be representative enough for the whole United States. In the dataset, some categories lack completeness, which were also not used while exploring the relationship between certain variables.  
+
+Based on the word cloud, I can further explore the correlation between a series of the most frequent words from the reviews and the overall level of star of the restaurants. For instance, if a the most frequent words from a restaurant review are `average `, `fine ` and `fair `, then I can build a model to predict the star level (say 3.0 in this case) based on the frequency of occurrence of those specific words from the reviews.  
